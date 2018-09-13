@@ -1,0 +1,201 @@
+---
+title: "Practical Machine Learning Assignment"
+author: "Edie Hawthorne"
+date: "9/13/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## Summary
+
+This project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Then we will analyze their data to quantify how well they do it by using the best fit prediction model to predicte the manner in which they did the exercise. 
+
+Exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+## Loading the training and testing data sets
+
+```{r ld, echo=TRUE, cache=FALSE, message=FALSE, results='hide', comment=""}
+library(caret)
+library(e1071)
+library(ggplot2)
+library(Hmisc)
+library(dplyr)
+library(splines)
+library(glmnet)
+library(randomForest)
+library(rattle)
+library(csv)
+library(kernlab)
+library(corrplot)
+
+training_df <- read.csv("~/Coursera Files/Practical Machine Learning/training.csv")
+
+testing_df <- read.csv("~/Coursera Files/Practical Machine Learning/testing.csv")
+
+```
+
+## Cross Validation on Training Data set
+
+Cross Validation on Training Data set using Data Slicing. The training_train data set has 14718 observations; the training_val oberservations has 160 observations.
+
+
+```{r cv, echo=TRUE}
+inTrain_nt <- createDataPartition(y=training_df$classe, p=0.75, list=FALSE)
+training_train <- training_df[inTrain_nt,]
+training_val <- training_df[-inTrain_nt,]
+```
+
+## Plotting Predictors for visualiztion
+
+Plot the training data set (training_train_new2) from the training dataframe(training_df) to analyze the corelation of the predictors. After analyzing the data and the plots, I decided to only use 13 predictors (pitch_belt, roll_arm, pitch_arm, yaw_arm, total_accel_arm, roll_dumbbell, pitch_dumbbell, yaw_dumbbell, total_accel_dumbbell, roll_forearm, pitch_forearm, yaw_forearm, total_accel_forearm) to build my models. 
+
+
+```{r corr, echo=FALSE, fig.width=20, comment=""}
+training_train_new <- training_train %>% select("roll_belt", "pitch_belt","yaw_belt","total_accel_belt","roll_arm","pitch_arm","yaw_arm","total_accel_arm","roll_dumbbell","pitch_dumbbell","yaw_dumbbell","total_accel_dumbbell","roll_forearm","pitch_forearm","yaw_forearm","total_accel_forearm","classe")
+
+
+cor <- cor(training_train_new[,-17], use = "complete.obs")
+corrplot.mixed(cor, lower.col = "black")
+
+training_train_new2 <- training_train %>% dplyr::select(pitch_belt, roll_arm,pitch_arm,yaw_arm,total_accel_arm,roll_dumbbell,pitch_dumbbell,yaw_dumbbell,total_accel_dumbbell,roll_forearm,pitch_forearm,yaw_forearm,total_accel_forearm,classe)
+
+
+training_val_new <- training_val %>% dplyr::select(pitch_belt, roll_arm,pitch_arm,yaw_arm,total_accel_arm,roll_dumbbell,pitch_dumbbell,yaw_dumbbell,total_accel_dumbbell,roll_forearm,pitch_forearm,yaw_forearm,total_accel_forearm, classe)
+
+testing_df_new <- testing_df %>% select(pitch_belt, roll_arm,pitch_arm,yaw_arm,total_accel_arm,roll_dumbbell,pitch_dumbbell,yaw_dumbbell,total_accel_dumbbell,roll_forearm,pitch_forearm,yaw_forearm,total_accel_forearm)
+```
+
+
+
+## PreProcessing - Standarlizing 
+
+By looking at the historygram of the "roll_forearm" variable, I try to standarlize the roll_forearm variable, and build a model called modelFit_stand based on the standarlized variables.
+
+```{r std, echo=FALSE}
+hist(training_train_new2$roll_forearm)
+
+preobj <- preProcess(training_train_new2[,-14], method=c("center","scale"))
+
+modelFit_stand <- train(classe~., data=training_train_new2, preProcess=c("center","scale"), method="rpart")
+```
+
+
+
+## Bridge Regression and Lasso Regression
+
+Build bridge regression and lasso regression models called ridge.mod and lasso.mod. And predict the "classe" variable based on these two models.
+
+```{r brla, echo=FALSE, comment=""}
+x = model.matrix(classe~., training_train_new2)
+y = droplevels(training_train_new2$classe, drop=TRUE)
+grid = 10^seq(10,-2,length=100)
+
+
+cv.out1 <- cv.glmnet(x,y, family="multinomial", type.multinomial = "grouped")
+bestlam = cv.out1$lambda.min
+
+ridge.mod = glmnet(
+    x,y,alpha=0, lambda = grid, thresh = 1e-12, 
+    family="multinomial", type.multinomial="grouped"
+)
+newx = model.matrix(classe~., training_val_new)
+newy = training_val_new$classe
+ridge.pred = predict(ridge.mod, s=bestlam, newx=newx, type="class")
+
+
+lasso.mod = glmnet(x,y,alpha = 1, lambda = grid, family="multinomial", type.multinomial="grouped")
+cv.out2=cv.glmnet(x,y,alpha=1, family="multinomial", type.multinomial = "grouped")
+bestlam2 = cv.out2$lambda.min
+newx2 = model.matrix(classe~., training_val_new)
+newy2 = training_val_new$classe
+lasso.pred = predict(lasso.mod, s=bestlam2, newx = newx2, type="class")
+```
+
+## Preprocessing with PCA
+
+Processing with PCA to reduce the number of predictors. Then build 3 PCA models using different methods (random forrest, rpart and gbm).
+
+
+```{r pca, echo=FALSE, comment=""}
+
+prComp <- prcomp(training_train_new2[,-14])
+
+plot(prComp)
+
+
+modelFit_pca <- randomForest(classe~., method="rf", preProcess = "pca", family="multinomial", data=training_train_new2, verbose = FALSE)
+
+
+modelFit_pca2 <- train(classe~., method="rpart", preProcess="pca", data=training_train_new2)
+
+modelFit_pca3 <- train(classe~., method="gbm", preProcess="pca", data=training_train_new2, distribution="multinomial", verbose = FALSE) 
+```
+
+## Decision Trees (Classification Trees)
+
+Analyze with Decision Trees and build a model based on the analysis called modFit_ct.
+
+```{r dt, echo=FALSE}
+modFit_ct <- train(classe~., method="rpart",data=training_train_new2)
+
+fancyRpartPlot(modFit_ct$finalModel)
+```
+
+
+```{r svm, echo=FALSE, comment=""}
+modFit_svm <- svm(classe~., data=training_train_new2)
+pred_svm <- predict(modFit_svm, training_val_new[,-14])
+```
+
+
+```{r modellist, echo=FALSE, comment="", warning=FALSE}
+modFit_rf <- randomForest(classe~., method="rf",data=training_train_new2, verbose = FALSE)
+
+modFit_gbm <- train(classe~., method="gbm",data=training_train_new2, distribution = "multinomial", verbose = FALSE)               
+
+modFit_lda <- train(classe~., method="lda",data=training_train_new2, verbose = FALSE)
+```
+
+
+## Predict New Values
+
+By plugging in all of the models we built, we found out that the best model that predicts the "classe" variable in this data set is to use Random Forest method to train the model, which gives us the best predicts by testing it on the testing set which an Accuracy rqte of 0.98.
+
+```{r pred, echo=FALSE, comment="", warning=FALSE, message=FALSE, cache=FALSE}
+pred_standarlize <- predict(modelFit_stand, training_val_new[,-14])
+pred_pca <- predict(modelFit_pca, training_val_new[,-14]) 
+pred_pca2 <- predict(modelFit_pca2, training_val_new[,-14])
+pred_pca3 <- predict(modelFit_pca3, training_val_new[,-14])
+pred_ct <- predict(modFit_ct, training_val_new[,-14])
+
+pred_rf <- predict(modFit_rf, newdata = training_val_new[,-14])
+pred_lda <- predict(modFit_lda, newdata = training_val_new[,-14])
+pred_gbm <- predict(modFit_gbm,newdata = training_val_new[,-14])
+
+modFit_rf
+confusionMatrix(pred_rf, training_val_new$classe)
+```
+
+
+
+```{r comb, echo=FALSE, comment="", warning=FALSE}
+predDF_all <- data.frame(pred_standarlize, pred_pca, pred_pca2, pred_pca3, pred_rf,  pred_lda, pred_ct,pred_gbm, classe = training_val$classe)
+predDF_pl <- data.frame(pred_pca, pred_rf, classe = training_val$classe)
+combModFit_all <- train(classe~., method="gam", data=predDF_all)
+combModFit_pl <- train(classe~., method="gam", data=predDF_all)
+combPred_all <- predict(combModFit_all, predDF_all)
+combPred_pl <- predict(combModFit_pl, predDF_pl)
+```
+
+## Fit the best model
+
+Then we use our best fit Random Forest Model to predict the participants' movements in the testing_df_new dataset to see how well they were performing.
+
+```{r bestfit, echo=TRUE}
+pred_bestmd <- predict(modFit_rf, newdata=testing_df_new, type="class")
+pred_bestmd
+```
